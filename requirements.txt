@@ -1,0 +1,2 @@
+# Optional for thumbnails; QR / text / file transfer use the standard library.
+Pillow>=9.3,<13

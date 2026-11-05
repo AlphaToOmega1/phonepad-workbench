@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#101114">
+<title>说话上屏</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #101114; color: #e8e8ea;
+    font: 16px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header { padding: 8px 14px; display: flex; align-items: center; gap: 8px;
+           border-bottom: 1px solid #24262b; flex: 0 0 auto; min-height: 44px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #4a4d55; flex: 0 0 auto; }
+  .dot.on { background: #3ddc84; box-shadow: 0 0 8px #3ddc84aa; }
+  .dot.err { background: #ff5c5c; }
+  .dot.warn { background: #ffb020; box-shadow: 0 0 8px #ffb020aa; }
+  #status { font-size: 12.5px; color: #9aa0aa; flex: 1 1 auto; }
+  #recentBtn { flex: 0 0 auto; padding: 6px 12px; font-size: 13px; border-radius: 999px;
+               background: #1e2128; color: #b9bec8; border: 1px solid #2a2d34; }
+  main { flex: 1 1 auto; display: flex; flex-direction: column; padding: 12px; gap: 10px; min-height: 0; }
+  textarea { flex: 1 1 auto; width: 100%; resize: none; min-height: 100px;
+             background: #17191e; color: #f2f2f4; border: 1px solid #2a2d34; border-radius: 14px;
+             padding: 14px; font: 19px/1.7 inherit; outline: none; }
+  textarea:focus { border-color: #3d6bff; }
+  #receivedText { flex: 0 0 auto; max-height: 190px; overflow: auto; border: 1px solid #36594c; border-radius: 12px; padding: 10px; background: #14251e; }
+  #receivedText[hidden] { display: none; }
+  #receivedBody { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow: auto; user-select: text; }
+  #copyReceived { padding: 7px 14px; font-size: 14px; margin-top: 8px; }
+  .row { display: flex; gap: 10px; flex: 0 0 auto; }
+  button { padding: 16px; border-radius: 14px; border: 0; font-size: 17px; font-weight: 700; color: #fff; background: #2a2d34; }
+  #send { flex: 2 1 0; background: #3d6bff; }
+  #send:disabled { background: #2a2d34; color: #6b7078; }
+  #upload { flex: 1 1 0; background: #235d4a; font-weight: 600; }
+  #clear { flex: .8 1 0; font-weight: 600; }
+  button:active { filter: brightness(.9); }
+
+  .overlay { position: fixed; inset: 0; background: #101114; z-index: 9;
+             display: flex; flex-direction: column; padding: 16px; gap: 12px;
+             padding-top: calc(16px + env(safe-area-inset-top)); }
+  .overlay[hidden] { display: none; }
+  .overlay h2 { font-size: 17px; margin: 0; font-weight: 600; }
+  .overlay .hint { font-size: 13px; color: #8b9099; margin: -6px 0 0; }
+  #recentList { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+
+  .item { position: relative; background: #17191e; border: 1px solid #262932;
+          border-radius: 12px; padding: 12px 40px 12px 12px; color: #dfe3ea;
+          font-size: 14.5px; line-height: 1.55; }
+  .item .meta { display: block; font-size: 11.5px; color: #7c828d; margin-bottom: 4px; }
+  .item .txt { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .item .del { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px;
+               padding: 0; border-radius: 50%; background: #24262b; color: #9aa0aa;
+               font-size: 17px; font-weight: 400; line-height: 1; }
+  .item .del:active { background: #3a2020; color: #ff8080; }
+
+  .empty { color: #6b7078; font-size: 14px; text-align: center; margin-top: 40px; }
+  .footer { display: flex; gap: 10px; flex: 0 0 auto; }
+  #recentClose { flex: 1 1 0; }
+  #recentClear { flex: 1 1 0; background: #3a2020; color: #ff9b9b; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot"></span>
+  <span id="status">未连接</span>
+  <button id="recentBtn">最近</button>
+</header>
+
+<main>
+  <section id="receivedText" hidden><strong>电脑发来的文字</strong><div id="receivedBody"></div><button id="copyReceived">复制文字</button><span id="receiveHint" style="font-size:12px;margin-left:8px"></span></section>
+  <textarea id="box" placeholder="在这里说话，说完点下面的按钮" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+  <a id="downloads" style="color:#9bb5ff;text-align:center;padding:6px">从电脑下载文件</a>
+  <div class="row">
+    <button id="send" disabled>上屏</button>
+    <button id="upload">传图</button>
+    <button id="clear">清空</button>
+  </div>
+</main>
+
+<div class="overlay" id="recent" hidden>
+  <h2>最近发过的</h2>
+  <p class="hint">点一条放回输入框；点右上角 × 删掉这一条。</p>
+  <div id="recentList"></div>
+  <div class="footer">
+    <button id="recentClear">清空记录</button>
+    <button id="recentClose">关闭</button>
+  </div>
+</div>
+
+<div class="overlay" id="start">
+  <h2 style="margin:auto 0 0;font-size:22px;text-align:center">说话上屏</h2>
+  <p class="hint" style="text-align:center;line-height:1.9;margin:10px auto 20px;max-width:300px">
+    用你的离线语音输入法往框里说话，<br>说完了点「上屏」才发到电脑。<br>不点就一直留在框里。
+  </p>
+  <button id="go" style="background:#3d6bff;margin:0 auto auto;max-width:320px;width:100%">开始</button>
+</div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+let receivedVersion = null;
+let receivedContent = '';
+async function receiveText() {
+  try {
+    const r = await fetch('/shared-text?t=' + encodeURIComponent(TOKEN), {cache: 'no-store'});
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.ok || data.version === receivedVersion) return;
+    receivedVersion = data.version;
+    receivedContent = data.text || '';
+    document.getElementById('receivedText').hidden = !receivedContent;
+    document.getElementById('receivedBody').textContent = receivedContent;
+    document.getElementById('receiveHint').textContent = '';
+  } catch (e) { /* 页面回到前台后会继续接收 */ }
+}
+document.getElementById('copyReceived').addEventListener('click', async () => {
+  let copied = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(receivedContent); copied = true;
+    }
+  } catch (e) { /* 局域网 HTTP 使用下面的兼容方式 */ }
+  if (!copied) {
+    const temp = document.createElement('textarea');
+    temp.value = receivedContent;
+    temp.style.cssText = 'position:fixed;top:0;left:0;opacity:0;width:1px;height:1px';
+    document.body.appendChild(temp); temp.focus(); temp.select();
+    temp.setSelectionRange(0, temp.value.length);
+    try { copied = document.execCommand('copy'); } catch (e) {}
+    temp.remove();
+  }
+  document.getElementById('receiveHint').textContent = copied ? '已复制' : '请长按上方文字选择复制';
+});
+receiveText();
+setInterval(() => { if (!document.hidden) receiveText(); }, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) receiveText(); });
+document.getElementById('downloads').href = '/downloads?t=' + encodeURIComponent(TOKEN);
+const box      = document.getElementById('box');
+const sendBtn  = document.getElementById('send');
+const dot      = document.getElementById('dot');
+const statusEl = document.getElementById('status');
+const startEl  = document.getElementById('start');
+const recentEl = document.getElementById('recent');
+const listEl   = document.getElementById('recentList');
+const clearBtn = document.getElementById('recentClear');
+const uploadBtn = document.getElementById('upload');
+
+const HKEY = 'phonepad_recent_v2';
+
+let wakeLock = null;
+let sending  = false;
+let confirmClear = false;
+
+function setState(cls, text) {
+  dot.className = 'dot' + (cls ? ' ' + cls : '');
+  statusEl.textContent = text;
+}
+
+function refreshButton() {
+  const n = box.value.trim().length;
+  sendBtn.disabled = (n === 0) || sending;
+  sendBtn.textContent = n ? `上屏（${n} 字）` : '上屏';
+}
+
+async function ping() {
+  try {
+    const r = await fetch('/ping', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    setState('on', '已连接电脑');
+    return true;
+  } catch (e) {
+    setState('err', '连不上电脑');
+    return false;
+  }
+}
+
+function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
+
+// ---------------- 本地记录 ----------------
+// 它只干一件事：兜住"这一次发丢了"。文字进了输入框，使命就结束了。
+// 所以：发成功的只留最近 1 条（给你看一眼是不是真进去了），10 分钟后自动消失；
+//       没发成功的（被拒收 / 报错）一直留着，直到你重发成功或手动删掉。
+
+const KEEP_OK = 1;              // 成功的留几条
+const EXPIRE_MS = 10 * 60 * 1000;  // 成功的那条多久后自动消失
+const MAX_FAIL = 10;            // 失败的防爆上限
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HKEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? pruneHistory(arr) : [];
+  } catch (e) { return []; }
+}
+
+function pruneHistory(arr) {
+  const now = Date.now();
+  let out = arr.filter(it => {
+    if (!it.ts) it.ts = now;
+    // 成功的那条会过期；失败的不过期
+    return it.ok ? (now - it.ts < EXPIRE_MS) : true;
+  });
+  // 成功的只留最近 KEEP_OK 条
+  let okSeen = 0;
+  out = out.filter(it => {
+    if (!it.ok) return true;
+    okSeen += 1;
+    return okSeen <= KEEP_OK;
+  });
+  // 失败的防爆
+  let failSeen = 0;
+  out = out.filter(it => {
+    if (it.ok) return true;
+    failSeen += 1;
+    return failSeen <= MAX_FAIL;
+  });
+  return out;
+}
+
+function saveHistory(arr) {
+  try { localStorage.setItem(HKEY, JSON.stringify(pruneHistory(arr))); } catch (e) { /* 忽略 */ }
+}
+
+function addHistory(text, ok) {
+  let arr = loadHistory();
+  // 同一条内容成功之后，把之前那条"未送达"的替掉，避免留两份
+  if (ok) arr = arr.filter(it => !(it.text === text && !it.ok));
+  arr.unshift({
+    t: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    ts: Date.now(),
+    text,
+    len: text.length,
+    ok: !!ok,
+  });
+  saveHistory(arr);
+}
+
+function removeHistory(index) {
+  const arr = loadHistory();
+  arr.splice(index, 1);
+  saveHistory(arr);
+  renderRecent(arr);
+}
+
+// ---------------- 发送 ----------------
+
+async function send() {
+  const text = box.value.trim();
+  if (!text || sending) return;
+  sending = true;
+  refreshButton();
+  setState('', '发送中…');
+
+  try {
+    const r = await fetch('/type', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, token: TOKEN })
+    });
+    const j = await r.json();
+
+    if (j && j.blocked) {
+      addHistory(text, false);
+      setState('warn', `没找到输入框（现在焦点在「${j.window || '桌面'}」），文字还在框里`);
+      vibrate([30, 60, 30]);
+      return;
+    }
+
+    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+
+    addHistory(text, true);
+    box.value = '';
+    setState('on', `已上屏 ${j.typed} 字`);
+    vibrate(18);
+  } catch (e) {
+    addHistory(text, false);
+    setState('err', '发送失败：' + e.message + '（文字还在，可重试）');
+    vibrate([30, 60, 30]);
+  } finally {
+    sending = false;
+    refreshButton();
+  }
+}
+
+box.addEventListener('input', refreshButton);
+sendBtn.addEventListener('click', send);
+
+uploadBtn.addEventListener('click', () => {
+  location.href = '/send-images?t=' + encodeURIComponent(TOKEN);
+});
+
+document.getElementById('clear').addEventListener('click', () => {
+  box.value = '';
+  refreshButton();
+  setState('on', '已清空');
+  box.focus();
+});
+
+// ---------------- 最近列表 ----------------
+
+function renderRecent(items) {
+  listEl.innerHTML = '';
+  if (!items || !items.length) {
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = '没有需要找回的内容';
+    listEl.appendChild(d);
+    return;
+  }
+  items.forEach((it, idx) => {
+    const row = document.createElement('div');
+    row.className = 'item';
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '×';
+    del.setAttribute('aria-label', '删除这条');
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      removeHistory(idx);
+      setState('on', '已删除一条');
+    });
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const tag = it.ok ? '已上屏' : '未送达';
+    meta.textContent = `${tag} · ${it.t || ''} · ${it.len || (it.text || '').length} 字`;
+    if (!it.ok) meta.style.color = '#ff9b6a';
+
+    const txt = document.createElement('span');
+    txt.className = 'txt';
+    txt.textContent = it.text || '';
+
+    row.appendChild(del);
+    row.appendChild(meta);
+    row.appendChild(txt);
+
+    row.addEventListener('click', () => {
+      box.value = it.text || '';
+      refreshButton();
+      recentEl.hidden = true;
+      setState('on', '已放回输入框，可修改后重发');
+      box.focus();
+    });
+
+    listEl.appendChild(row);
+  });
+}
+
+async function openRecent() {
+  recentEl.hidden = false;
+  confirmClear = false;
+  clearBtn.textContent = '清空记录';
+  clearBtn.style.background = '';
+  renderRecent(loadHistory());
+}
+
+document.getElementById('recentBtn').addEventListener('click', openRecent);
+document.getElementById('recentClose').addEventListener('click', () => { recentEl.hidden = true; });
+
+clearBtn.addEventListener('click', async () => {
+  if (!confirmClear) {
+    confirmClear = true;
+    clearBtn.textContent = '再点一次确认';
+    clearBtn.style.background = '#5a2020';
+    setTimeout(() => {
+      confirmClear = false;
+      clearBtn.textContent = '清空记录';
+      clearBtn.style.background = '';
+    }, 4000);
+    return;
+  }
+  confirmClear = false;
+  clearBtn.textContent = '清空记录';
+  clearBtn.style.background = '';
+
+  saveHistory([]);
+  renderRecent([]);
+  setState('on', '记录已清空');
+  try {
+    await fetch('/recent_clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN })
+    });
+  } catch (e) { /* 电脑那边没清掉也不影响本地 */ }
+});
+
+// ---------------- 其它 ----------------
+
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+document.getElementById('go').addEventListener('click', async () => {
+  startEl.hidden = true;
+  await ping();
+  await keepAwake();
+  box.focus();
+  refreshButton();
+});
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible') {
+    if (!wakeLock) keepAwake();
+    ping();
+  }
+});
+
+refreshButton();
+ping();
+setInterval(ping, 8000);
+</script>
+</body>
+</html>

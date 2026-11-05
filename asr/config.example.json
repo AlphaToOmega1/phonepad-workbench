@@ -1,0 +1,5 @@
+{
+  "model_path": "models/faster-whisper-large-v3-turbo",
+  "device": "cpu",
+  "compute_type": "int8"
+}
