@@ -140,7 +140,20 @@ document.getElementById('copyReceived').addEventListener('click', async () => {
 receiveText();
 setInterval(() => { if (!document.hidden) receiveText(); }, 2000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) receiveText(); });
-document.getElementById('downloads').href = '/downloads?t=' + encodeURIComponent(TOKEN);
+const downloadsLink=document.getElementById('downloads');
+downloadsLink.href = '/downloads?t=' + encodeURIComponent(TOKEN);
+downloadsLink.style.cssText='color:#fff;background:#315fe9;border-radius:10px;text-align:center;padding:10px;text-decoration:none';
+async function checkIncomingFiles(){
+  try{
+    const r=await fetch('/sent-status?t='+encodeURIComponent(TOKEN),{cache:'no-store'});
+    if(!r.ok)return;
+    const data=await r.json();
+    downloadsLink.textContent=data.count?'电脑发来 '+data.count+' 个文件 · 点此查看/下载':'从电脑下载文件';
+  }catch(e){}
+}
+checkIncomingFiles();
+setInterval(()=>{if(!document.hidden)checkIncomingFiles();},2000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkIncomingFiles();});
 const box      = document.getElementById('box');
 const sendBtn  = document.getElementById('send');
 const dot      = document.getElementById('dot');

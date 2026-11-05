@@ -84,51 +84,70 @@ def addresses(path):
     return [value for value in values if not value.startswith('http://127.')]
 
 def enable_file_drop(root, callback):
-    """Windows 原生文件拖放，无额外依赖。返回关闭时的清理函数。"""
-    if os.name != 'nt': return lambda: None
+    """Win32 subclass callback only queues paths; Tk runs on its normal event loop."""
+    if os.name!='nt':return lambda:None
     import ctypes
     from ctypes import wintypes
     user=ctypes.WinDLL('user32',use_last_error=True)
     shell=ctypes.WinDLL('shell32',use_last_error=True)
-    proc_type=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)
-    setter=user.SetWindowLongPtrW if ctypes.sizeof(ctypes.c_void_p)==8 else user.SetWindowLongW
-    setter.argtypes=[wintypes.HWND,ctypes.c_int,ctypes.c_void_p]; setter.restype=ctypes.c_void_p
-    user.CallWindowProcW.argtypes=[ctypes.c_void_p,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
-    user.CallWindowProcW.restype=ctypes.c_ssize_t
-    user.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT]; user.GetAncestor.restype=wintypes.HWND
+    common=ctypes.WinDLL('comctl32',use_last_error=True)
+    proc_type=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM,ctypes.c_size_t,ctypes.c_size_t)
+    common.SetWindowSubclass.argtypes=[wintypes.HWND,proc_type,ctypes.c_size_t,ctypes.c_size_t]
+    common.SetWindowSubclass.restype=wintypes.BOOL
+    common.RemoveWindowSubclass.argtypes=[wintypes.HWND,proc_type,ctypes.c_size_t]
+    common.DefSubclassProc.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
+    common.DefSubclassProc.restype=ctypes.c_ssize_t
+    user.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT];user.GetAncestor.restype=wintypes.HWND
     shell.DragAcceptFiles.argtypes=[wintypes.HWND,wintypes.BOOL]
     shell.DragQueryFileW.argtypes=[wintypes.HANDLE,wintypes.UINT,wintypes.LPWSTR,wintypes.UINT]
     shell.DragQueryFileW.restype=wintypes.UINT
     shell.DragFinish.argtypes=[wintypes.HANDLE]
-    root.update_idletasks()
-    hwnd=user.GetAncestor(root.winfo_id(),2)
-    previous=None
+    root.update_idletasks();hwnd=user.GetAncestor(root.winfo_id(),2)
+    incoming=queue.Queue();alive=True;timer=None
     @proc_type
-    def wndproc(window,message,wparam,lparam):
-        if message==0x0233:  # WM_DROPFILES
-            paths=[]
+    def wndproc(window,message,wparam,lparam,identifier,reference):
+        if message==0x0233:
             try:
-                count=shell.DragQueryFileW(wparam,0xffffffff,None,0)
-                for i in range(count):
-                    length=shell.DragQueryFileW(wparam,i,None,0)
-                    buffer=ctypes.create_unicode_buffer(length+1)
-                    shell.DragQueryFileW(wparam,i,buffer,length+1)
-                    paths.append(buffer.value)
-            finally: shell.DragFinish(wparam)
-            root.after_idle(lambda: callback(paths))
+                paths=[]
+                for i in range(shell.DragQueryFileW(wparam,0xffffffff,None,0)):
+                    size=shell.DragQueryFileW(wparam,i,None,0)
+                    buffer=ctypes.create_unicode_buffer(size+1)
+                    shell.DragQueryFileW(wparam,i,buffer,size+1);paths.append(buffer.value)
+                incoming.put(paths)
+            except Exception:
+                pass  # Never let a Python exception escape a native callback.
+            finally:shell.DragFinish(wparam)
             return 0
-        return user.CallWindowProcW(previous,window,message,wparam,lparam)
-    previous=setter(hwnd,-4,ctypes.cast(wndproc,ctypes.c_void_p))
-    if not previous: raise ctypes.WinError(ctypes.get_last_error())
+        if message==0x0082:common.RemoveWindowSubclass(window,wndproc,identifier)
+        return common.DefSubclassProc(window,message,wparam,lparam)
+    if not common.SetWindowSubclass(hwnd,wndproc,1,0):raise ctypes.WinError(ctypes.get_last_error())
     root._drop_callback=wndproc
     shell.DragAcceptFiles(hwnd,True)
+    def drain():
+        nonlocal timer
+        if not alive:return
+        try:
+            while True:callback(incoming.get_nowait())
+        except queue.Empty:pass
+        except Exception as exc:
+            import sys
+            root.report_callback_exception(type(exc),exc,sys.exc_info()[2])
+        timer=root.after(80,drain)
+    timer=root.after(80,drain)
     def cleanup():
+        nonlocal alive
+        if not alive:return
+        alive=False
+        if timer is not None:
+            try:root.after_cancel(timer)
+            except tk.TclError:pass
         shell.DragAcceptFiles(hwnd,False)
-        setter(hwnd,-4,previous)
+        common.RemoveWindowSubclass(hwnd,wndproc,1)
     return cleanup
 
+
 def main():
-    root=tk.Tk(); root.title('手机工作台 v1.6 · 扫码与互传')
+    root=tk.Tk(); root.title('手机工作台 v1.6.1 · 拖放修复')
     try:
         local=json.loads((Path(__file__).parent/'desktop.local.json').read_text(encoding='utf-8-sig'))
         if Path(local.get('icon_path','')).is_file(): root.iconbitmap(local['icon_path'])
@@ -227,9 +246,15 @@ def main():
                     if source.resolve().parent==folder.resolve(): count+=1; continue
                     target=folder/source.name
                     if target.exists(): target=folder/(source.stem+'-'+secrets.token_hex(3)+source.suffix)
-                    with source.open('rb') as src,target.open('xb') as dst: shutil.copyfileobj(src,dst)
+                    temporary=folder/('.phonepad-send-'+secrets.token_hex(8)+'.tmp')
+                    try:
+                        with source.open('rb') as src,temporary.open('xb') as dst: shutil.copyfileobj(src,dst)
+                        while True:
+                            try:temporary.rename(target);break
+                            except FileExistsError:target=folder/(source.stem+'-'+secrets.token_hex(3)+source.suffix)
+                    finally:temporary.unlink(missing_ok=True)
                     count+=1
-                results.put(f'已准备 {count} 个文件。手机点“从电脑下载文件”，刷新列表后下载。')
+                results.put(f'已加入待接收列表 {count} 个文件（尚未下载到手机）。手机页面自动发现后，点“下载原图/文件”领取。')
             except Exception as exc: results.put(f'已准备 {count} 个文件；其余准备失败：{exc}')
         threading.Thread(target=copy_files,daemon=True).start()
     label(file_page,'把文件发到手机',17,True).pack(anchor='w',padx=24,pady=(14,4))
@@ -314,4 +339,9 @@ def main():
     root.protocol('WM_DELETE_WINDOW',close)
     root.mainloop()
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    import faulthandler,sys
+    _crash_log=(Path(__file__).parent/'crash.local.log').open('a',encoding='utf-8')
+    faulthandler.enable(file=_crash_log)
+    if sys.stderr is None:sys.stderr=_crash_log
+    main()

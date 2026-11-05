@@ -13,6 +13,7 @@ PhonePad —— 把手机上的文字，直接打进电脑当前窗口。
 
 import argparse
 import html
+import hashlib
 import io
 import shutil
 import ctypes
@@ -77,6 +78,18 @@ RECENT_MAX = 6
 RECENT_LOCK = threading.Lock()
 SENT_LOCK = threading.Lock()
 IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')
+
+def sent_status():
+    folder=HERE/'发给手机'
+    records=[]
+    if folder.exists():
+        for item in folder.iterdir():
+            if item.name.startswith('.') or item.is_symlink() or not item.is_file():continue
+            try:
+                stat=item.stat();records.append((item.name,stat.st_size,stat.st_mtime_ns))
+            except FileNotFoundError:continue
+    encoded=json.dumps(sorted(records),ensure_ascii=False).encode('utf-8')
+    return {'ok':True,'count':len(records),'version':hashlib.sha256(encoded).hexdigest()}
 
 
 def remove_sent_files(name=None, clear_images=False):
@@ -282,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, {"ok": True, "version": shared.get("version", ""), "text": shared.get("text", "")})
             return
-        if path in ("/downloads", "/download", "/preview"):
+        if path in ("/downloads", "/download", "/preview", "/sent-status"):
             from urllib.parse import parse_qs, quote
             query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             if query.get("t", [""])[0] != TOKEN:
@@ -290,12 +303,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             folder = HERE / "发给手机"
             folder.mkdir(exist_ok=True)
+            if path=='/sent-status':
+                self._send_json(200,sent_status())
+                return
             if path == "/downloads":
                 links = []
                 def added(item):
                     stat = item.stat()
                     return stat.st_ctime if os.name == 'nt' else stat.st_mtime
-                candidates = [p for p in folder.iterdir() if not p.is_symlink() and p.is_file()]
+                candidates = [p for p in folder.iterdir() if not p.name.startswith('.') and not p.is_symlink() and p.is_file()]
                 for item in sorted(candidates, key=lambda p: (added(p), p.name.lower()), reverse=True):
                     if item.is_file() and not item.is_symlink():
                         url = "/download?t=" + quote(TOKEN) + "&name=" + quote(item.name)
@@ -315,6 +331,31 @@ class Handler(BaseHTTPRequestHandler):
                 script = '''<script>
 const localToken = ''' + json.dumps(TOKEN) + ''';
 let removing = false;
+let listVersion = '';
+let refreshingList = false;
+async function refreshList() {
+  if (document.hidden || removing || refreshingList) return;
+  refreshingList = true;
+  try {
+    const response = await fetch('/sent-status?t='+encodeURIComponent(localToken),{cache:'no-store'});
+    if (!response.ok) throw new Error('HTTP '+response.status);
+    const info = await response.json();
+    if (info.version !== listVersion) {
+      const page = await fetch(location.href,{cache:'no-store'});
+      if (!page.ok) throw new Error('HTTP '+page.status);
+      const parsed = new DOMParser().parseFromString(await page.text(),'text/html');
+      if (!removing) {
+        document.querySelector('.grid').replaceChildren(...parsed.querySelector('.grid').childNodes);
+        listVersion = info.version;
+      }
+    }
+    document.getElementById('liveState').textContent='自动更新 · '+info.count+' 个待接收文件';
+  } catch(e) { document.getElementById('liveState').textContent='连接暂时中断，恢复后自动重试'; }
+  finally { refreshingList = false; }
+}
+setInterval(refreshList,2000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshList();});
+refreshList();
 async function removeSent(payload) {
   if (removing) return;
   removing = true;
@@ -339,6 +380,7 @@ function clearImages() {
 }
 </script>'''
                 page = page.replace('</main></html>', '</main>' + script + '</html>')
+                page = page.replace('<div class="toolbar">','<p class="hint" id="liveState">自动更新中…</p><div class="toolbar">')
                 self._send_bytes(200, page.encode('utf-8'), 'text/html; charset=utf-8')
                 return
             name = query.get("name", [""])[0]
