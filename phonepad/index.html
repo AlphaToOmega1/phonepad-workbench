@@ -74,7 +74,7 @@
 </header>
 
 <main>
-  <section id="receivedText" hidden><strong>电脑发来的文字</strong><div id="receivedBody"></div><button id="copyReceived">复制文字</button><span id="receiveHint" style="font-size:12px;margin-left:8px"></span></section>
+  <section id="receivedText" hidden><strong>电脑发来的文字</strong><div id="receivedBody"></div><button id="copyReceived">复制文字</button><button id="clearReceived" style="padding:7px 14px;font-size:14px;background:#503131;margin-left:8px">清空接收文字</button><span id="receiveHint" style="font-size:12px;margin-left:8px"></span></section>
   <textarea id="box" placeholder="在这里说话，说完点下面的按钮" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
   <a id="downloads" style="color:#9bb5ff;text-align:center;padding:6px">从电脑下载文件</a>
   <div class="row">
@@ -106,12 +106,16 @@
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 let receivedVersion = null;
 let receivedContent = '';
+let receiveEpoch = 0;
+let clearingReceived = false;
 async function receiveText() {
+  if(clearingReceived)return;
+  const epoch=receiveEpoch;
   try {
     const r = await fetch('/shared-text?t=' + encodeURIComponent(TOKEN), {cache: 'no-store'});
     if (!r.ok) return;
     const data = await r.json();
-    if (!data.ok || data.version === receivedVersion) return;
+    if (epoch!==receiveEpoch || !data.ok || data.version === receivedVersion) return;
     receivedVersion = data.version;
     receivedContent = data.text || '';
     document.getElementById('receivedText').hidden = !receivedContent;
@@ -119,6 +123,20 @@ async function receiveText() {
     document.getElementById('receiveHint').textContent = '';
   } catch (e) { /* 页面回到前台后会继续接收 */ }
 }
+document.getElementById('clearReceived').addEventListener('click',async()=>{
+  if(clearingReceived)return;
+  clearingReceived=true;receiveEpoch++;
+  const button=document.getElementById('clearReceived');button.disabled=true;
+  try{
+    const r=await fetch('/shared-text-clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:TOKEN,version:receivedVersion})});
+    const result=await r.json();
+    if(!r.ok || !result.ok)throw new Error(result.error||'清空失败');
+    receivedVersion=result.version;receivedContent='';
+    document.getElementById('receivedBody').textContent='';
+    document.getElementById('receivedText').hidden=true;
+  }catch(e){document.getElementById('receiveHint').textContent=e.message;}
+  finally{clearingReceived=false;button.disabled=false;}
+});
 document.getElementById('copyReceived').addEventListener('click', async () => {
   let copied = false;
   try {

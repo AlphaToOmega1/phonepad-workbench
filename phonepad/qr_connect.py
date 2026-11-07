@@ -280,14 +280,17 @@ def main():
     text_status=tk.StringVar(value='等待粘贴文字 · 手机需保持 PhonePad 页面打开')
     label(text_page,'',fg=muted,textvariable=text_status,wraplength=650).pack(anchor='w',padx=22)
     shared_path=Path(__file__).parent/'.shared-text.local.json'; pending=None
+    last_shared_version=None
     def publish_text():
-        nonlocal pending
+        nonlocal pending,last_shared_version
         pending=None; content=editor.get('1.0','end-1c')
         if len(content)>100000: text_status.set('文字超过十万字，请缩短后再同步。'); return
         temporary=shared_path.with_name('.shared-text-'+secrets.token_hex(4)+'.tmp')
         try:
-            temporary.write_text(json.dumps({'version':secrets.token_hex(12),'text':content},ensure_ascii=False),encoding='utf-8')
+            version=secrets.token_hex(12)
+            temporary.write_text(json.dumps({'version':version,'text':content},ensure_ascii=False),encoding='utf-8')
             os.replace(temporary,shared_path)
+            last_shared_version=version
             text_status.set(f'已发布 {len(content)} 字 · 手机页面约两秒内自动接收' if content else '已清空同步文字')
         except OSError as exc:
             text_status.set('同步失败：'+str(exc)); temporary.unlink(missing_ok=True)
@@ -300,6 +303,19 @@ def main():
     try: editor.insert('1.0',json.loads(shared_path.read_text(encoding='utf-8')).get('text',''))
     except (OSError,ValueError): pass
     editor.edit_modified(False); editor.bind('<<Modified>>',modified)
+    def receive_phone_clear():
+        nonlocal pending,last_shared_version
+        try:
+            shared=json.loads(shared_path.read_text(encoding='utf-8'))
+            version=shared.get('version')
+            if version!=last_shared_version and shared.get('source')=='phone-clear' and shared.get('text')=='':
+                if pending is not None:root.after_cancel(pending);pending=None
+                editor.delete('1.0','end');editor.edit_modified(False)
+                text_status.set('手机已清空接收文字，电脑发送框已同步清空。')
+            last_shared_version=version
+        except (OSError,ValueError):pass
+        root.after(200,receive_phone_clear)
+    receive_phone_clear()
     bottom=tk.Frame(text_page,bg='white'); bottom.pack(fill='x',padx=22,pady=(8,16))
     ttk.Button(bottom,text='清空同步文字',command=lambda:editor.delete('1.0','end'),style='Transfer.TButton').pack(side='left')
     label(bottom,'文字保留至清空',fg=muted).pack(side='right')

@@ -77,6 +77,7 @@ RECENT: list[dict] = []      # 只在内存里，不写磁盘
 RECENT_MAX = 6
 RECENT_LOCK = threading.Lock()
 SENT_LOCK = threading.Lock()
+TEXT_LOCK = threading.Lock()
 IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')
 
 def sent_status():
@@ -92,7 +93,7 @@ def sent_status():
     return {'ok':True,'count':len(records),'version':hashlib.sha256(encoded).hexdigest()}
 
 
-def remove_sent_files(name=None, clear_images=False):
+def remove_sent_files(name=None, clear_images=False, clear_all=False):
     """只移动待发送副本，回收目录保留原文件名。"""
     folder = HERE / '发给手机'
     trash = HERE / '.removed_sent'
@@ -100,7 +101,9 @@ def remove_sent_files(name=None, clear_images=False):
         raise ValueError('目录无效')
     with SENT_LOCK:
         folder.mkdir(exist_ok=True)
-        if clear_images:
+        if clear_all:
+            items = [p for p in folder.iterdir() if not p.name.startswith('.') and not p.is_symlink() and p.is_file()]
+        elif clear_images:
             items = [p for p in folder.iterdir() if not p.is_symlink() and p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES]
         else:
             if not isinstance(name, str) or not name or Path(name).name != name:
@@ -327,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
 *{box-sizing:border-box}body{margin:0;background:#f2f5fa;color:#172b46;font:16px/1.5 system-ui,sans-serif;padding:22px 16px}header{max-width:860px;margin:0 auto 20px}h1{font-size:24px;margin:0 0 6px}.hint,.meta{color:#66758a;font-size:13px}.toolbar{display:flex;gap:12px;align-items:center;margin-top:14px}button,.download{border:0;border-radius:10px;padding:10px 18px;background:#315fe9;color:white;font:inherit;text-decoration:none;display:inline-block}button{cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:16px;max-width:860px;margin:auto}article{background:white;border:1px solid #e2e8f1;border-radius:16px;overflow:hidden;min-width:0}.picture{display:flex;align-items:center;justify-content:center;height:220px;background:#e9eef5;color:#66758a;text-decoration:none;padding:8px}.picture img{width:100%;height:100%;object-fit:contain}.placeholder{font-size:32px}.info{padding:16px}.name{font-weight:600;overflow-wrap:anywhere}.meta{margin:6px 0 14px}.empty{padding:30px;background:white;border-radius:14px}.toolbar a{color:#315fe9;text-decoration:none}
 </style><header><h1>电脑发来的文件</h1><div class="hint">最新加入的在最前 · 点图片查看大图，确认后下载原图</div><div class="toolbar"><button onclick="location.reload()">刷新列表</button><a href="/?t=''' + quote(TOKEN) + '''">返回输入页面</a></div></header><main class="grid">''' + (''.join(links) or '<p class="empty">暂无文件。在电脑选择文件后，点击上方刷新。</p>') + '</main></html>'
                 page = page.replace('</style>', '.remove{background:#fff0f0;color:#ad3434;border:1px solid #f2cece}.toolbar{flex-wrap:wrap}button:disabled{opacity:.5}</style>')
-                page = page.replace('<button onclick="location.reload()">刷新列表</button>', '<button onclick="location.reload()">刷新列表</button><button class="remove" onclick="clearImages()">清空图片</button>')
+                page = page.replace('<button onclick="location.reload()">刷新列表</button>', '<button onclick="location.reload()">刷新列表</button><button class="remove" onclick="clearFiles()">清空全部文件</button>')
                 script = '''<script>
 const localToken = ''' + json.dumps(TOKEN) + ''';
 let removing = false;
@@ -375,8 +378,8 @@ async function removeSent(payload) {
 function removeFile(name) {
   if (confirm('从待发送列表移除这项？电脑原文件不会被删除。\\n' + name)) removeSent({name});
 }
-function clearImages() {
-  if (confirm('清空待发送列表里的所有图片？其他文件会保留，电脑原文件不会被删除。')) removeSent({action:'clear_images'});
+function clearFiles() {
+  if (confirm('清空全部待接收文件？包括图片、PDF、电子书和其他文件。仅移除电脑待发送副本，电脑原文件及手机已下载文件不受影响。')) removeSent({action:'clear_all'});
 }
 </script>'''
                 page = page.replace('</main></html>', '</main>' + script + '</html>')
@@ -502,12 +505,12 @@ function clearImages() {
             self._send_json(200, {"ok": True, "name": name})
             return
 
-        if route not in ("/type", "/recent_clear", "/remove_sent"):
+        if route not in ("/type", "/recent_clear", "/remove_sent", "/shared-text-clear"):
             self._send_bytes(404, b"not found", "text/plain; charset=utf-8")
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            if route == '/remove_sent' and not 0 < length <= 16384:
+            if route in ('/remove_sent', '/shared-text-clear') and not 0 < length <= 16384:
                 self._send_json(413, {"ok": False, "error": "请求过大或为空"})
                 return
             raw = self.rfile.read(length) if length else b"{}"
@@ -520,12 +523,32 @@ function clearImages() {
             self._send_json(403, {"ok": False, "error": "token"})
             return
 
+        if route == '/shared-text-clear':
+            with TEXT_LOCK:
+                shared_path=HERE/'.shared-text.local.json'
+                temporary=HERE/('.shared-text-'+secrets.token_hex(8)+'.tmp')
+                try:
+                    current=json.loads(shared_path.read_text(encoding='utf-8')) if shared_path.exists() else {'version':''}
+                    if not isinstance(current,dict):raise ValueError('invalid shared text')
+                    if data.get('version') != current.get('version',''):
+                        self._send_json(409,{'ok':False,'error':'电脑文字刚刚更新，请查看新内容后再点清空'})
+                        return
+                    cleared={'version':secrets.token_hex(12),'text':'','source':'phone-clear'}
+                    temporary.write_text(json.dumps(cleared),encoding='utf-8')
+                    os.replace(temporary,shared_path)
+                except (OSError,ValueError):
+                    self._send_json(503,{'ok':False,'error':'暂时无法清空，请稍后重试'})
+                    return
+                finally:temporary.unlink(missing_ok=True)
+            self._send_json(200,{'ok':True,**cleared})
+            return
+
         if route == '/remove_sent':
-            if data.get('action') not in (None, 'clear_images'):
+            if data.get('action') not in (None, 'clear_images', 'clear_all'):
                 self._send_json(400, {"ok": False, "error": "操作无效"})
                 return
             try:
-                removed, failed = remove_sent_files(data.get('name'), data.get('action') == 'clear_images')
+                removed, failed = remove_sent_files(data.get('name'), data.get('action') == 'clear_images', data.get('action') == 'clear_all')
             except ValueError as exc:
                 self._send_json(400, {"ok": False, "error": str(exc)})
                 return
