@@ -78,6 +78,7 @@ RECENT_MAX = 6
 RECENT_LOCK = threading.Lock()
 SENT_LOCK = threading.Lock()
 TEXT_LOCK = threading.Lock()
+TYPE_LOCK = threading.Lock()
 IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')
 
 def sent_status():
@@ -166,6 +167,10 @@ class INPUT(ctypes.Structure):
     _anonymous_ = ("u",)
     _fields_ = [("type", wintypes.DWORD), ("u", _INPUTUNION)]
 
+user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+user32.SendInput.restype = wintypes.UINT
+user32.GetForegroundWindow.restype = wintypes.HWND
+
 
 def _send(ch: str, keyup: bool) -> None:
     code = ord(ch)
@@ -240,20 +245,34 @@ def cannot_type(info: dict) -> str:
     return ""
 
 
-def type_text(text: str) -> None:
-    """逐字注入，遇到换行发 Enter。"""
+def type_text(text: str, expected_window=None) -> None:
+    """批量 Unicode 输入，保留剪贴板；换行仍按原功能发送回车。"""
     if DRY_RUN:
         print(f"[dry-run] 收到 {len(text)} 字（未输入）", flush=True)
         return
 
-    for ch in text:
-        if ch in "\r\n":
-            _send("\r", False)
-            _send("\r", True)
-        else:
-            _send(ch, False)
-            _send(ch, True)
-        time.sleep(0.001)
+    normalized=text.replace('\r\n','\n').replace('\r','\n').replace('\n','\r')
+    raw=normalized.encode('utf-16-le')
+    units=[raw[i] | (raw[i+1]<<8) for i in range(0,len(raw),2)]
+    with TYPE_LOCK:
+        target=expected_window if expected_window is not None else user32.GetForegroundWindow()
+        offset=0
+        while offset<len(units):
+            end=min(offset+256,len(units))
+            if end<len(units) and 0xD800<=units[end-1]<=0xDBFF:end-=1
+            batch=units[offset:end]
+            events=(INPUT*(2*len(batch)))()
+            for i,unit in enumerate(batch):
+                events[2*i].type=INPUT_KEYBOARD
+                events[2*i].ki=KEYBDINPUT(0,unit,KEYEVENTF_UNICODE,0,0)
+                events[2*i+1].type=INPUT_KEYBOARD
+                events[2*i+1].ki=KEYBDINPUT(0,unit,KEYEVENTF_UNICODE|KEYEVENTF_KEYUP,0,0)
+            if not target or user32.GetForegroundWindow()!=target:
+                raise RuntimeError('目标窗口已变化，输入已停止。请核对目标内容后再重试，避免重复。')
+            sent=user32.SendInput(len(events),events,ctypes.sizeof(INPUT))
+            if sent!=len(events):
+                raise RuntimeError('Windows 未完整接收输入，可能是目标程序权限较高。请核对目标内容后再重试，避免重复。')
+            offset=end
 
 
 # ---------------------------------------------------------------- HTTP 服务
@@ -589,7 +608,7 @@ function clearFiles() {
             return
 
         try:
-            type_text(text)
+            type_text(text,info['hwnd'])
         except Exception as exc:                       # noqa: BLE001
             self._send_json(500, {"ok": False, "error": str(exc)})
             return
@@ -760,3 +779,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
