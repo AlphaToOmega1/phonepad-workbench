@@ -268,7 +268,7 @@ def main():
     label(file_page,'',fg=muted,textvariable=transfer_status,wraplength=620,justify='left').pack(anchor='w',padx=24,pady=(0,6))
     tools=tk.Frame(file_page,bg='white'); tools.pack(fill='x',padx=24,pady=4)
     ttk.Button(tools,text='打开待发送文件夹',command=open_folder,style='Transfer.TButton').pack(side='left',padx=(0,12))
-    ttk.Button(tools,text='查看手机传来的图片',command=open_received,style='Transfer.TButton').pack(side='left')
+    ttk.Button(tools,text='查看手机传来的文件',command=open_received,style='Transfer.TButton').pack(side='left')
     top=tk.Frame(text_page,bg='white'); top.pack(fill='x',padx=22,pady=(18,6))
     label(top,'粘贴文字，手机自动接收',17,True).pack(side='left')
     label(text_page,'在下方按 Ctrl+V，修改后自动同步。手机收到后点“复制文字”。',fg=muted).pack(anchor='w',padx=22,pady=(0,12))
@@ -319,7 +319,7 @@ def main():
     bottom=tk.Frame(text_page,bg='white'); bottom.pack(fill='x',padx=22,pady=(8,16))
     ttk.Button(bottom,text='清空同步文字',command=lambda:editor.delete('1.0','end'),style='Transfer.TButton').pack(side='left')
     label(bottom,'文字保留至清空',fg=muted).pack(side='right')
-    tk.Label(root,text='局域网直连  ·  同一个手机页面接收文字、下载文件、上传图片',bg=bg,fg=muted,font=('Microsoft YaHei UI',9)).pack(pady=(0,12))
+    tk.Label(root,text='局域网直连  ·  同一个手机页面接收文字、下载文件、上传文件',bg=bg,fg=muted,font=('Microsoft YaHei UI',9)).pack(pady=(0,12))
     def poll_results():
         nonlocal transferring
         try:

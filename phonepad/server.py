@@ -492,7 +492,7 @@ function clearFiles() {
             except ValueError:
                 length = 0
             if not 0 < length <= 20 * 1024 * 1024:
-                self._send_json(413, {"ok": False, "error": "图片需小于 20 MB"})
+                self._send_json(413, {"ok": False, "error": "文件需大于 0 字节且不超过 20 MB"})
                 return
             self.connection.settimeout(60)
             try:
@@ -501,27 +501,52 @@ function clearFiles() {
                 self._send_json(408, {"ok": False, "error": "传输超时，请保持手机页面打开后重试"})
                 return
             if len(image) != length:
-                self._send_json(400, {"ok": False, "error": "图片没有完整收到，请重试"})
+                self._send_json(400, {"ok": False, "error": "文件没有完整收到，请重试"})
                 return
-            if image.startswith(b"\x89PNG\r\n\x1a\n"):
-                ext = ".png"
-            elif image.startswith(b"\xff\xd8\xff"):
-                ext = ".jpg"
-            elif image[:4] == b"RIFF" and image[8:12] == b"WEBP":
-                ext = ".webp"
+            from urllib.parse import unquote
+            import re
+            original = unquote(self.headers.get('X-File-Name', ''))
+            if original:
+                original = original.replace('\\', '/').split('/')[-1]
+                original = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', original).strip(' .')
+                original = original[:120].rstrip(' .') or 'file'
             else:
-                self._send_json(400, {"ok": False, "error": "请选择 PNG、JPG 或 WebP 图片"})
-                return
+                if image.startswith(b"\x89PNG\r\n\x1a\n"): original = 'image.png'
+                elif image.startswith(b"\xff\xd8\xff"): original = 'image.jpg'
+                elif image[:4] == b"RIFF" and image[8:12] == b"WEBP": original = 'image.webp'
+                else:
+                    self._send_json(400, {"ok": False, "error": "缺少文件名，请刷新手机页面后重试"})
+                    return
             folder = HERE / "received_images"
             try:
                 folder.mkdir(exist_ok=True)
-                name = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3) + ext
+                name = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3) + "-" + original
                 (folder / name).write_bytes(image)
             except OSError as exc:
                 self._send_json(500, {"ok": False, "error": f"保存失败：{exc}"})
                 return
-            log_meta(f"收到图片 {len(image)} 字节  来自 {self.client_address[0]}")
-            self._send_json(200, {"ok": True, "name": name})
+            share = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "").get("share", [""])[0] == "1"
+            shared = False
+            share_error = ""
+            if share:
+                try:
+                    target = HERE / "发给手机"
+                    if target.is_symlink():
+                        raise ValueError("待接收目录无效")
+                    with SENT_LOCK:
+                        target.mkdir(exist_ok=True)
+                        temp = target / (".phonepad-send-" + secrets.token_hex(8) + ".tmp")
+                        try:
+                            with temp.open('xb') as stream:
+                                stream.write(image)
+                            temp.rename(target / name)
+                        finally:
+                            if temp.exists(): temp.unlink()
+                    shared = True
+                except (OSError, ValueError) as exc:
+                    share_error = str(exc)
+            log_meta(f"收到文件 {len(image)} 字节  来自 {self.client_address[0]}")
+            self._send_json(200, {"ok": True, "name": name, "shared": shared, "share_error": share_error})
             return
 
         if route not in ("/type", "/recent_clear", "/remove_sent", "/shared-text-clear"):
