@@ -65,6 +65,7 @@ Windows 与手机之间的局域网互传工具。打开电脑端直接显示二
 | 路径 | 内容 |
 | --- | --- |
 | `phonepad/received_images/` | 手机传来的文件（沿用原目录名） |
+| `phonepad/.removed_received/` | 旧版清除图片功能的恢复目录；新版将图片放入 Windows 回收站 |
 | `phonepad/发给手机/` | 电脑准备给手机的副本 |
 | `phonepad/.removed_sent/` | 被移除的副本；移回“发给手机”可恢复 |
 | `phonepad/.shared-text.local.json` | 主动粘贴并发布的电脑文字；界面清空可清除 |

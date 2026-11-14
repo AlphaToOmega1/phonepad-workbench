@@ -9,6 +9,7 @@ phone.log
 received_images/
 发给手机/
 .removed_sent/
+.removed_received/
 models/
 *.bin
 *.onnx

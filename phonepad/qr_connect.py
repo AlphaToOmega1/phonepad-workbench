@@ -224,6 +224,34 @@ def main():
     def open_received():
         target=Path(__file__).parent/'received_images'
         target.mkdir(exist_ok=True); os.startfile(str(target))
+    def clear_received_images():
+        import ctypes
+        from ctypes import wintypes
+        target=Path(__file__).parent/'received_images'
+        if target.is_symlink():
+            messagebox.showerror('无法清除','接收目录无效。',parent=root); return
+        suffixes={'.jpg','.jpeg','.png','.webp','.gif','.bmp','.heic','.heif','.avif','.tif','.tiff','.svg'}
+        try:
+            images=[p for p in target.iterdir() if not p.name.startswith('.') and not p.is_symlink() and p.is_file() and p.suffix.lower() in suffixes] if target.is_dir() else []
+        except OSError as exc:
+            messagebox.showerror('无法读取接收目录',str(exc),parent=root); return
+        if not images:
+            messagebox.showinfo('清除图片','接收文件夹中没有图片。',parent=root); return
+        if not messagebox.askyesno('清除收到的图片',f'将 {len(images)} 张图片放入 Windows 回收站？\n其他文件会保留。',parent=root): return
+        class SHFILEOPSTRUCT(ctypes.Structure):
+            _fields_=[('hwnd',wintypes.HWND),('wFunc',wintypes.UINT),('pFrom',wintypes.LPCWSTR),
+                      ('pTo',wintypes.LPCWSTR),('fFlags',wintypes.WORD),('fAnyOperationsAborted',wintypes.BOOL),
+                      ('hNameMappings',ctypes.c_void_p),('lpszProgressTitle',wintypes.LPCWSTR)]
+        shell=ctypes.WinDLL('shell32',use_last_error=True)
+        shell.SHFileOperationW.argtypes=[ctypes.POINTER(SHFILEOPSTRUCT)]
+        shell.SHFileOperationW.restype=ctypes.c_int
+        paths='\0'.join(str(item.resolve()) for item in images if not item.is_symlink() and item.is_file())+'\0\0'
+        op=SHFILEOPSTRUCT(root.winfo_id(),3,paths,None,0x0040|0x4000,False,None,None)
+        result=shell.SHFileOperationW(ctypes.byref(op))
+        if result==0 and not op.fAnyOperationsAborted:
+            messagebox.showinfo('清除图片','操作完成，请在 Windows 回收站查看。',parent=root)
+        else:
+            messagebox.showwarning('清除未完全完成','操作已取消或部分失败，请检查接收文件夹和回收站。',parent=root)
     transferring=False
     def choose_files(paths=None):
         nonlocal transferring
@@ -269,6 +297,7 @@ def main():
     tools=tk.Frame(file_page,bg='white'); tools.pack(fill='x',padx=24,pady=4)
     ttk.Button(tools,text='打开待发送文件夹',command=open_folder,style='Transfer.TButton').pack(side='left',padx=(0,12))
     ttk.Button(tools,text='查看手机传来的文件',command=open_received,style='Transfer.TButton').pack(side='left')
+    ttk.Button(file_page,text='清除手机传来的图片',command=clear_received_images,style='Transfer.TButton').pack(anchor='w',padx=24,pady=(4,8))
     top=tk.Frame(text_page,bg='white'); top.pack(fill='x',padx=22,pady=(18,6))
     label(top,'粘贴文字，手机自动接收',17,True).pack(side='left')
     label(text_page,'在下方按 Ctrl+V，修改后自动同步。手机收到后点“复制文字”。',fg=muted).pack(anchor='w',padx=22,pady=(0,12))
